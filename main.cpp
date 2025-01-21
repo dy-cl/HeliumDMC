@@ -4,10 +4,11 @@
 #include <Eigen/Dense>
 #include <cmath>
 #include <fstream>
+#include <omp.h>
 
 #define numWalkersTarget 1000
-#define numSteps 30000
-#define dtau 0.005
+#define numSteps 50000
+#define dtau 0.01
 
 // Walker object
 class Walker
@@ -128,7 +129,7 @@ int main()
     
     // Open file to store results and write headers
     std::ofstream outFile("results.dat");
-    outFile << "Step, Population, Average Energy, Variance" << std::endl;
+    outFile << "Step, Population, Average Energy" << std::endl;
 
     // RNG
     std::random_device rd;
@@ -142,7 +143,9 @@ int main()
     double learningRate = 0.01;
     double ET = EZero;
 
-   
+    // Timer
+    double start = omp_get_wtime();
+
     // Main loop
     for (int alpha = 0; alpha < static_cast<int>(alphas.size()); alpha++)
     {
@@ -155,75 +158,95 @@ int main()
         // Accumulators
         double sumLocalEnergy = 0.0;
         int countLocalEnergy = 0;
-
+        
+       
         for (int step = 0; step < numSteps; step++)
         {
 
             // Container to hold new population of walkers (i.e; those that were not deleted and the newly birthed ones)
             std::vector<Walker> newWalkers;
+            
+            // Begin parallel region
+            #pragma omp parallel
+            {
+                // Each thread should have own temporary vector of walkers and own RNG
+                std::vector<Walker> newLocalWalkers;
+                std::mt19937 localGen(rd());
 
-            for (Walker& walker : walkers)
-            {   
-                // Record current position for acceptance test
-                Walker walkerOld = walker;
-
-                // Shift walker according to Fokker-Planck force
-                shiftFokkerPlanck(walker, alphas[alpha]);
-                
-                // Shift walker accoring to η gaussian distribution
-                shiftEtaGaussian(walker, gamma, gen);
-
-                // Test acceptance
-                bool isAccepted = testAcceptance(walkerOld, walker, alphas[alpha], gen);
-                
-                // If move rejected put walker back
-                if (isAccepted == false)
-                {
-                    walker = walkerOld;
-                    newWalkers.push_back(walker);
+                #pragma omp for schedule(guided) reduction(+:sumLocalEnergy, countLocalEnergy)
+                for (int walkerNum = 0; walkerNum < static_cast<int>(walkers.size()); walkerNum++)
+                {   
                     
-                    // Discard equilibration steps
-                    if (step > equilibrationSteps)
-                    {   
-                        // Accumulate energy
-                        double energy = localEnergy(walker, alphas[alpha]);
-                        sumLocalEnergy += energy;
-                        countLocalEnergy++;
+                    Walker& walker = walkers[walkerNum];
+
+                    // Record current position for acceptance test
+                    Walker walkerOld = walker;
+
+                    // Shift walker according to Fokker-Planck force
+                    shiftFokkerPlanck(walker, alphas[alpha]);
+                    
+                    // Shift walker accoring to η gaussian distribution
+                    shiftEtaGaussian(walker, gamma, localGen);
+
+                    // Test acceptance
+                    bool isAccepted = testAcceptance(walkerOld, walker, alphas[alpha], localGen);
+                    
+                    // If move rejected put walker back
+                    if (isAccepted == false)
+                    {
+                        walker = walkerOld;
+                        newLocalWalkers.push_back(walker);
+                        
+                        // Discard equilibration steps
+                        if (step > equilibrationSteps)
+                        {   
+                            // Accumulate energy
+                            double energy = localEnergy(walker, alphas[alpha]);
+                            sumLocalEnergy += energy;
+                            countLocalEnergy++;
+                        }
+
                     }
 
-                }
+                    // If move accepted evaluate q and delete or birth walker
+                    else if (isAccepted == true)
+                    {   
+                       double q = std::exp(-dtau*(localEnergy(walker, alphas[alpha]) + localEnergy(walkerOld, alphas[alpha]))/2 + dtau*ET);
 
-                // If move accepted evaluate q and delete or birth walker
-                else if (isAccepted == true)
-                {   
-                   double q = std::exp(-dtau*(localEnergy(walker, alphas[alpha]) + localEnergy(walkerOld, alphas[alpha]))/2 + dtau*ET);
+                       std::uniform_real_distribution<double> dist(0, 1);
+                       double r = dist(localGen);
+                       double s = q + r;
+                       int sInteger = static_cast<int>(std::floor(s)); // Truncate s to obtain only integer part
+                        
+                       // If sInteger == 0 --> Do nothing --> Walker is not carried forward into next step and hence deleted
 
-                   std::uniform_real_distribution<double> dist(0, 1);
-                   double r = dist(gen);
-                   double s = q + r;
-                   int sInteger = static_cast<int>(std::floor(s)); // Truncate s to obtain only integer part
-                    
-                   // If sInteger == 0 --> Do nothing --> Walker is not carried forward into next step and hence deleted
-
-                   // Birth integer part of s walkers at old position for s > 0
-                   if (sInteger > 0)
-                   {
-                        for (int i = 0; i < sInteger; i++)
-                        {
-                            newWalkers.push_back(walker);
-                            
-                            // Discard equilibration steps
-                            if (step > equilibrationSteps)
-                            {   
-                                // Accumulate energy
-                                double energy = localEnergy(walker, alphas[alpha]);
-                                sumLocalEnergy += energy;
-                                countLocalEnergy++;
+                       // Birth integer part of s walkers at old position for s > 0
+                       if (sInteger > 0)
+                       {
+                            for (int i = 0; i < sInteger; i++)
+                            {
+                                newLocalWalkers.push_back(walker);
+                                
+                                // Discard equilibration steps
+                                if (step > equilibrationSteps)
+                                {   
+                                    // Accumulate energy
+                                    double energy = localEnergy(walker, alphas[alpha]);
+                                    sumLocalEnergy += energy;
+                                    countLocalEnergy++;
+                                }
                             }
-                        }
-                   }
+                       }
+                    }
                 }
-            }
+
+                // Merge newLocalWalkers into full shared newWalkers
+                #pragma omp critical
+                {
+                    newWalkers.insert(newWalkers.end(), newLocalWalkers.begin(), newLocalWalkers.end());
+                }
+
+            } // End parallel region
             
             // Carry forward surviving walkers
             walkers = std::move(newWalkers);
@@ -262,6 +285,10 @@ int main()
         double energy = sumLocalEnergy/countLocalEnergy;
         std::cout << "Ground State Energy: " << energy << " for alpha: " << alphas[alpha] << std::endl;
         std::cout << std::endl;
+        
+        // Find time for simulation
+        double finish = omp_get_wtime();
+        std::cout << "Simulation of ~ " << numWalkersTarget << " walkers with " << numSteps << " steps took " << finish - start << " seconds." << std::endl; 
     }
     return 0;
 }

@@ -1,5 +1,5 @@
 CXX = g++
-CXXFLAGS = -Wall -Wextra -O3
+CXXFLAGS = -Wall -Wextra -O3 -fopenmp
 TARGET = HeliumDMC
 SRC = main.cpp
 OBJ = $(SRC:.cpp=.o)
