@@ -3,9 +3,10 @@
 #include <iostream>
 #include <Eigen/Dense>
 #include <cmath>
+#include <fstream>
 
 #define numWalkersTarget 1000
-#define numSteps 21000
+#define numSteps 25000
 #define dtau 0.002
 
 // Walker object
@@ -38,16 +39,14 @@ double localEnergy(Walker walker, double alpha)
     return EL;
 }
 
-// Initialise all walkers at random positions in 6D configuration space
-void initialiseWalkers(std::vector<Walker>& walkers, std::mt19937& gen, double lower, double upper)
+// Initialise all walkers at same position in 6D configuration space
+void initialiseWalkers(std::vector<Walker>& walkers)
 {  
-    std::uniform_real_distribution<double> dist(lower, upper);  
-    
-    // Assign all walkers random positions
+    // Assign all walkers the same position
     for (Walker& walker : walkers)
     {
-        walker.pos1 = Eigen::Vector3d(dist(gen), dist(gen), dist(gen));
-        walker.pos2 = Eigen::Vector3d(dist(gen), dist(gen), dist(gen));
+        walker.pos1 = Eigen::Vector3d(1,1,1);
+        walker.pos2 = Eigen::Vector3d(-1,-1,-1);
     }
 }
 
@@ -126,6 +125,10 @@ bool testAcceptance(Walker walkerOld, Walker walker, double alpha, std::mt19937&
 
 int main()
 {   
+    
+    // Open file to store results and write headers
+    std::ofstream outFile("results.dat");
+    outFile << "Step, Population, Average Energy, Variance" << std::endl;
 
     // RNG
     std::random_device rd;
@@ -134,8 +137,9 @@ int main()
     // Constants
     double gamma = std::sqrt(dtau);
     double EZero = -2.9;
-    int equilibrationSteps = 1000;
+    int equilibrationSteps = 5000;
     std::vector<double> alphas = {0.15};
+    double learningRate = 0.01;
     double ET = EZero;
 
    
@@ -144,7 +148,7 @@ int main()
     {
         // Initialise Walkers 
         std::vector<Walker> walkers(numWalkersTarget);
-        initialiseWalkers(walkers, gen, -2.5, 2.5);
+        initialiseWalkers(walkers);
 
         std::cout << "alpha: " << alphas[alpha] << std::endl;
         
@@ -171,17 +175,16 @@ int main()
 
                 // Test acceptance
                 bool isAccepted = testAcceptance(walkerOld, walker, alphas[alpha], gen);
-                //bool isAccepted = true; //When I just set this true I get the right answer, but actually using the function makes it slightly off
-                                        //Perhaps problem with testAcceptance function?
                 
                 // If move rejected put walker back
                 if (isAccepted == false)
                 {
                     walker = walkerOld;
+                    newWalkers.push_back(walker);
                 }
 
                 // If move accepted evaluate q and delete or birth walker
-                if (isAccepted == true)
+                else if (isAccepted == true)
                 {   
                    double q = std::exp(-dtau*(localEnergy(walker, alphas[alpha]) + localEnergy(walkerOld, alphas[alpha]))/2 + dtau*ET);
 
@@ -201,8 +204,10 @@ int main()
                             
                             // Discard equilibration steps
                             if (step > equilibrationSteps)
-                            {
-                                sumLocalEnergy += localEnergy(walker, alphas[alpha]);
+                            {   
+                                // Accumulate energy (and energy squared for variance calculation)
+                                double energy = localEnergy(walker, alphas[alpha]);
+                                sumLocalEnergy += energy;
                                 countLocalEnergy++;
                             }
                         }
@@ -221,10 +226,11 @@ int main()
             }
 
             // Update ET
-            ET += 0.01 * std::log(static_cast<double>(numWalkersTarget) / walkers.size());
+            ET += learningRate * std::log(static_cast<double>(numWalkersTarget) / walkers.size());
  
             // Output progress
             double localEnergyCurrent = sumLocalEnergy/countLocalEnergy;
+
             if (step % 1000 == 0)
             {    
                 if (std::isnan(localEnergyCurrent))
@@ -233,18 +239,19 @@ int main()
                 }
                 else
                 {
-                std::cout << "Step: " << step << ", Population: " << walkers.size() << ", Average energy: " << sumLocalEnergy/countLocalEnergy << std::endl;
+                    std::cout << "Step: " << step << ", Population: " << walkers.size() << ", Average energy: " 
+                              << localEnergyCurrent << std::endl;
+
+                    outFile << step << ", " << walkers.size() << ", " << localEnergyCurrent << std::endl; // Write to file
                 }
             }
 
         }
-
+        
+        // Caluclate final energy
         double energy = sumLocalEnergy/countLocalEnergy;
         std::cout << "Ground State Energy: " << energy << " for alpha: " << alphas[alpha] << std::endl;
         std::cout << std::endl;
-
     }
-
     return 0;
 }
-
