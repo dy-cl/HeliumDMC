@@ -6,8 +6,8 @@
 #include <fstream>
 
 #define numWalkersTarget 1000
-#define numSteps 25000
-#define dtau 0.002
+#define numSteps 30000
+#define dtau 0.005
 
 // Walker object
 class Walker
@@ -137,7 +137,7 @@ int main()
     // Constants
     double gamma = std::sqrt(dtau);
     double EZero = -2.9;
-    int equilibrationSteps = 5000;
+    int equilibrationSteps = 10000;
     std::vector<double> alphas = {0.15};
     double learningRate = 0.01;
     double ET = EZero;
@@ -181,6 +181,16 @@ int main()
                 {
                     walker = walkerOld;
                     newWalkers.push_back(walker);
+                    
+                    // Discard equilibration steps
+                    if (step > equilibrationSteps)
+                    {   
+                        // Accumulate energy
+                        double energy = localEnergy(walker, alphas[alpha]);
+                        sumLocalEnergy += energy;
+                        countLocalEnergy++;
+                    }
+
                 }
 
                 // If move accepted evaluate q and delete or birth walker
@@ -205,7 +215,7 @@ int main()
                             // Discard equilibration steps
                             if (step > equilibrationSteps)
                             {   
-                                // Accumulate energy (and energy squared for variance calculation)
+                                // Accumulate energy
                                 double energy = localEnergy(walker, alphas[alpha]);
                                 sumLocalEnergy += energy;
                                 countLocalEnergy++;
